@@ -1,6 +1,9 @@
 import os
 import random
 from collections import namedtuple
+from collections import deque
+from heapdict import heapdict
+import copy
 
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
@@ -35,10 +38,10 @@ class Board(object):
     def create(cls, n_players):
         """
         Create a Board and randomly allocate the territories. Place one army on each territory.
-        
+
         Args:
             n_players (int): Number of players.
-                
+
         Returns:
             Board: A board with territories randomly allocated to the players.
         """
@@ -48,12 +51,12 @@ class Board(object):
 
     # ====================== #
     # == Neighbor Methods == #
-    # ====================== #   
+    # ====================== #
 
     def neighbors(self, territory_id):
         """
         Create a generator of all territories neighboring a given territory.
-            
+
         Args:
             territory_id (int): ID of the territory to find neighbors of.
 
@@ -67,10 +70,10 @@ class Board(object):
         """
         Create a generator of all territories neighboring a given territory, of which
         the owner is not the same as the owner of the original territory.
-            
+
         Args:
             territory_id (int): ID of the territory.
-                
+
         Returns:
             generator: Generator of Territories.
         """
@@ -93,7 +96,6 @@ class Board(object):
         neighbor_ids = risk.definitions.territory_neighbors[territory_id]
         return (t for t in self.data if (t.player_id == player_id and t.territory_id in neighbor_ids))
 
-    
     # ================== #
     # == Path Methods == #
     # ================== #
@@ -111,11 +113,23 @@ class Board(object):
         Returns:
             bool: True if the input path is valid
         '''
+        if not len(set(path)) == len(path):
+            return False
 
-    
+        def _is_valid_path(path):
+            if len(path) <= 1:
+                return True
+            neighbors = list(self.neighbors(path[0]))
+            neighbors = [n.territory_id for n in neighbors]
+            if path[1] in neighbors:
+                return _is_valid_path(path[1:])
+            else:
+                return False
+        return _is_valid_path(path)
+
     def is_valid_attack_path(self, path):
         '''
-        The rules of Risk state that when attacking, 
+        The rules of Risk state that when attacking,
         a player's armies cannot move through territories they already occupy;
         they must move through enemy territories.
         All valid attacks, therefore, will follow a path of starting on one player's territory and moving trough enemy territories.
@@ -130,7 +144,15 @@ class Board(object):
         Returns:
             bool: True if the path is an attack path
         '''
+        if len(path) < 2:
+            return False
+        if not self.is_valid_path(path):
+            return False
 
+        for territory in path[1:]:
+            if self.owner(path[0]) == self.owner(territory):
+                return False
+        return True
 
     def cost_of_attack_path(self, path):
         '''
@@ -143,7 +165,14 @@ class Board(object):
         Returns:
             bool: the number of enemy armies in the path
         '''
+        if not self.is_valid_attack_path(path):
+            return False
 
+        enemy_armies = 0
+        for territory in path[1:]:
+            enemy_armies += self.armies(territory)
+
+        return enemy_armies
 
     def shortest_path(self, source, target):
         '''
@@ -161,7 +190,26 @@ class Board(object):
         Returns:
             [int]: a valid path between source and target that has minimum length; this path is guaranteed to exist
         '''
+        if source == target:
+            return [source]
 
+        dictionary = {}
+        dictionary[source] = [source]
+        queue = deque()
+        queue.append(source)
+        visited_territories = set([source])
+
+        while len(queue) != 0:
+            current_territory = queue.popleft()
+            for territory in risk.definitions.territory_neighbors[current_territory]:
+                if territory not in visited_territories:
+                    visited_territories.add(territory)
+                    new_stack = copy.copy(dictionary[current_territory])
+                    new_stack.append(territory)
+                    if territory == target:
+                        return new_stack
+                    dictionary[territory] = new_stack
+                    queue.append(territory)
 
     def can_fortify(self, source, target):
         '''
@@ -176,7 +224,29 @@ class Board(object):
         Returns:
             bool: True if reinforcing the target from the source territory is a valid move
         '''
+        if source == target:
+            return True
 
+        dictionary = {}
+        dictionary[source] = [source]
+        queue = deque()
+        queue.append(source)
+        visited_territories = set([source])
+
+        while len(queue) != 0:
+            current_territory = queue.popleft()
+            friendly = self.friendly_neighbors(current_territory)
+            friendly = [f.territory_id for f in friendly]
+            for territory in friendly:
+                if territory not in visited_territories:
+                    visited_territories.add(territory)
+                    new_stack = copy.copy(dictionary[current_territory])
+                    new_stack.append(territory)
+                    if territory == target:
+                        return True
+                    dictionary[territory] = new_stack
+                    queue.append(territory)
+        return False
 
     def cheapest_attack_path(self, source, target):
         '''
@@ -191,7 +261,24 @@ class Board(object):
         Returns:
             [int]: a list of territory_ids representing the valid attack path; if no path exists, then it returns None instead
         '''
+        dictionary = {}
+        dictionary[source] = [source]
+        queue = heapdict()
+        queue[source] = 0
+        visited_territories = set([source])
 
+        while len(queue) != 0:
+            current_territory = queue.popitem()
+            for territory in risk.definitions.territory_neighbors[current_territory[0]]:
+                if territory not in visited_territories and self.owner(source) != self.owner(territory):
+                    visited_territories.add(territory)
+                    new_stack = copy.copy(dictionary[current_territory[0]])
+                    new_stack.append(territory)
+                    if territory == target:
+                        return new_stack
+                    priority = current_territory[1] + self.armies(territory)
+                    dictionary[territory] = new_stack
+                    queue[territory] = priority
 
     def can_attack(self, source, target):
         '''
@@ -202,7 +289,24 @@ class Board(object):
         Returns:
             bool: True if a valid attack path exists between source and target; else False
         '''
+        dictionary = {}
+        dictionary[source] = [source]
+        queue = deque()
+        queue.append(source)
+        visited_territories = set([source])
 
+        while len(queue) != 0:
+            current_territory = queue.popleft()
+            for territory in risk.definitions.territory_neighbors[current_territory]:
+                if territory not in visited_territories and self.owner(source) != self.owner(territory):
+                    visited_territories.add(territory)
+                    new_stack = copy.copy(dictionary[current_territory])
+                    new_stack.append(territory)
+                    if territory == target:
+                        return True
+                    dictionary[territory] = new_stack
+                    queue.append(territory)
+        return False
 
     # ======================= #
     # == Continent Methods == #
@@ -211,7 +315,7 @@ class Board(object):
     def continent(self, continent_id):
         """
         Create a generator of all territories that belong to a given continent.
-            
+
         Args:
             continent_id (int): ID of the continent.
 
@@ -223,10 +327,10 @@ class Board(object):
     def n_continents(self, player_id):
         """
         Calculate the total number of continents owned by a player.
-        
+
         Args:
             player_id (int): ID of the player.
-                
+
         Returns:
             int: Number of continents owned by the player.
         """
@@ -235,11 +339,11 @@ class Board(object):
     def owns_continent(self, player_id, continent_id):
         """
         Check if a player owns a continent.
-        
+
         Args:
             player_id (int): ID of the player.
             continent_id (int): ID of the continent.
-            
+
         Returns:
             bool: True if the player owns all of the continent's territories.
         """
@@ -249,10 +353,10 @@ class Board(object):
         """
         Find the owner of all territories in a continent. If the continent
         is owned by various players, return None.
-            
+
         Args:
             continent_id (int): ID of the continent.
-                
+
         Returns:
             int/None: Player_id if a player owns all territories, else None.
         """
@@ -264,7 +368,7 @@ class Board(object):
     def continent_fraction(self, continent_id, player_id):
         """
         Compute the fraction of a continent a player owns.
-        
+
         Args:
             continent_id (int): ID of the continent.
             player_id (int): ID of the player.
@@ -279,7 +383,7 @@ class Board(object):
     def num_foreign_continent_territories(self, continent_id, player_id):
         """
         Compute the number of territories owned by other players on a given continent.
-        
+
         Args:
             continent_id (int): ID of the continent.
             player_id (int): ID of the player.
@@ -291,12 +395,12 @@ class Board(object):
 
     # ==================== #
     # == Action Methods == #
-    # ==================== #    
+    # ==================== #
 
     def reinforcements(self, player_id):
         """
         Calculate the number of reinforcements a player is entitled to.
-            
+
         Args:
             player_id (int): ID of the player.
 
@@ -326,7 +430,7 @@ class Board(object):
     def possible_fortifications(self, player_id):
         """
         Assemble a list of all possible fortifications for the players.
-        
+
         Args:
             player_id (int): ID of the attacking player.
 
@@ -392,20 +496,20 @@ class Board(object):
 
     # ====================== #
     # == Plotting Methods == #
-    # ====================== #    
+    # ====================== #
 
     def plot_board(self, path=None, plot_graph=False, filename=None):
-        """ 
-        Plot the board. 
-        
+        """
+        Plot the board.
+
         Args:
             path ([int]): a path of territory_ids to plot
             plot_graph (bool): if true, plots the graph structure overlayed on the board
             filename (str): if given, the plot will be saved to the given filename instead of displayed
         """
         im = plt.imread(os.getcwd() + '/img/risk.png')
-        dpi=96
-        img_width=800
+        dpi = 96
+        img_width = 800
         fig, ax = plt.subplots(figsize=(img_width/dpi, 300/dpi), dpi=dpi)
         _ = plt.imshow(im)
         plt.axis('off')
@@ -416,13 +520,13 @@ class Board(object):
             if not self.is_valid_path(xs):
                 print('WARNING: not a valid path')
             coor = risk.definitions.territory_locations[xs[0]]
-            verts=[(coor[0]*1.2, coor[1]*1.22 + 25)]
-            codes = [ Path.MOVETO ]
-            for i,x in enumerate(xs[1:]):
-                if (xs[i]==19 and xs[i+1]==1) or (xs[i]==1 and xs[i+1]==19):
+            verts = [(coor[0]*1.2, coor[1]*1.22 + 25)]
+            codes = [Path.MOVETO]
+            for i, x in enumerate(xs[1:]):
+                if (xs[i] == 19 and xs[i+1] == 1) or (xs[i] == 1 and xs[i+1] == 19):
                     coor = risk.definitions.territory_locations[x]
-                    #verts.append((coor[0]*1.2, coor[1]*1.22 + 25))
-                    verts.append((1000,-200))
+                    # verts.append((coor[0]*1.2, coor[1]*1.22 + 25))
+                    verts.append((1000, -200))
                     verts.append((coor[0]*1.2, coor[1]*1.22 + 25))
                     codes.append(Path.CURVE3)
                     codes.append(Path.CURVE3)
@@ -453,13 +557,13 @@ class Board(object):
             plt.show()
         else:
             plt.tight_layout()
-            plt.savefig(filename,bbox_inches='tight')
+            plt.savefig(filename, bbox_inches='tight')
 
     @staticmethod
     def plot_single(territory_id, player_id, armies):
         """
         Plot a single army dot.
-            
+
         Args:
             territory_id (int): the id of the territory to plot,
             player_id (int): the player id of the owner,
@@ -467,24 +571,24 @@ class Board(object):
         """
         coor = risk.definitions.territory_locations[territory_id]
         plt.scatter(
-            [coor[0]*1.2], 
-            [coor[1]*1.22], 
-            s=400, 
+            [coor[0]*1.2],
+            [coor[1]*1.22],
+            s=400,
             c=risk.definitions.player_colors[player_id],
             zorder=2
             )
         plt.text(
-            coor[0]*1.2, 
-            coor[1]*1.22 + 15, 
+            coor[0]*1.2,
+            coor[1]*1.22 + 15,
             s=str(armies),
             color='black' if risk.definitions.player_colors[player_id] in ['yellow', 'pink'] else 'white',
-            ha='center', 
+            ha='center',
             size=15
             )
 
     # ==================== #
     # == Combat Methods == #
-    # ==================== #    
+    # ==================== #
 
     @classmethod
     def fight(cls, attackers, defenders):
@@ -509,7 +613,7 @@ class Board(object):
     def throw_dice():
         """
         Throw a dice.
-        
+
         Returns:
             int: random int in [1, 6]. """
         return random.randint(1, 6)
